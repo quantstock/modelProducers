@@ -14,8 +14,8 @@ import sys
 class Data(object):
     def __init__(self):
         self.__connect_db()
-        
-    def get_db_df(self, collection_name, stockId, startTime, endTime):
+
+    def get_df_from_db(self, collection_name, stockId, startTime, endTime):
         temp_df = pd.DataFrame(list(self.db[collection_name].find(
              {"timestamp":{"$gte":startTime, "$lte":endTime},
               "stockId":stockId})))  # selection criterion
@@ -30,71 +30,19 @@ class Data(object):
         else:
             return temp_df
 
-    def get_singleDailyChips_df(self, stockId, startTime, endTime):
-        chip_collections = [
-            'dailyCreditTrading',
-            'dailyFundTrading',
-            'dailyDayTrading',
-            'dailyOddLots',
-            'dailyStockLending']
-        temp_dfs = []
-        for collections in chip_collections:
-            temp_df = self.get_df_from_db(collections, stockId, startTime, endTime)
-            temp_dfs.append(temp_df)
-        temp_df = pd.concat(temp_dfs, axis=1)
-
-        temp_df = temp_df.drop(columns=
-            ['借券賣出',
-            '借券賣出今日餘額',
-            '借券賣出可使用額度',
-            '借券賣出庫存異動'])
-        #處理三大法人資料不連續
-        if "dailyFundTrading" in chip_collections:
-            temp_df = self.__merge_df_columns(temp_df, "自營商賣出股數", '自營商賣出股數自行買賣', '自營商賣出股數避險')
-            temp_df = self.__merge_df_columns(temp_df, "自營商買進股數", '自營商買進股數自行買賣', '自營商買進股數避險')
-            temp_df = self.__merge_df_columns(temp_df, "外資賣出股數", '外資自營商賣出股數', '外陸資賣出股數不含外資自營商')
-            temp_df = self.__merge_df_columns(temp_df, "外資買進股數", '外資自營商買進股數', '外陸資買進股數不含外資自營商')
-            temp_df = self.__merge_df_columns(temp_df, "外資買賣超股數", '外資自營商買賣超股數', '外陸資買賣超股數不含外資自營商')
-
-        return temp_df
-
-    def get_singleDailyOHLCV_df(self, stockId, startTime, endTime):
-        temp_df = pd.DataFrame(list(self.db["dailyPrice"].find(
-                 {"timestamp": {
-                     "$gte": startTime, "$lte": endTime},
-                     "stockId":stockId},  # selection criterion
-                 {"timestamp": "-1",
-                  "成交股數": "1",
-                  "收盤價": "1",
-                  "最低價": "1",
-                  "最高價": "1",
-                  "開盤價": "1"})))
-        # 處理dataframe
-        temp_df = temp_df.drop(columns="_id").drop_duplicates("timestamp", keep="first").set_index("timestamp")
-        # 重新命名OHLCV
-        temp_df = temp_df.rename(columns = {
-            "成交股數": "volume",
-            "收盤價": "close",
-            "最低價": "low",
-            "最高價": "high",
-            "開盤價": "open"})
-        # 將df命名為stockId
-        temp_df.name = stockId
-        # 將str轉為float
-        temp_df = self.__parse_df_to_float(temp_df)
-        return temp_df
-
-    def get_dailyBrokerPoints_df(self, stockid, startTime, endTime):
+    def get_singleDailyBrokerPoints_df(self, stockId, startTime, endTime):
         temp_df = pd.DataFrame(list(self.db["dailyBrokerPoints"].find({"stockId":stockId}))).drop(columns="_id")
         temp_df[['均價', '買價', '買賣超', '買量', '賣價', '賣量']] = temp_df[['均價', '買價', '買賣超', '買量', '賣價', '賣量']].astype("float")
 
-        broker_name_df = pd.DataFrame(list(self.db["券商代號表"].find()))
-        foreign_broker_list = broker_name_df.loc[broker_name_df["類別"] != "本土券商", "券商名稱"].dropna().to_list()+ ["台灣巴克萊"]
-        df["類別"] = df["券商名稱"].apply(lambda x: "外資" if x in foreign_broker_list else "台資")
-        df = df.set_index("timestamp")
+        if not self.foreign_broker_list:
+            broker_name_df = pd.DataFrame(list(self.db["券商代號表"].find()))
+            self.foreign_broker_list = broker_name_df.loc[broker_name_df["類別"] != "本土券商", "券商名稱"].dropna().to_list()+ ["台灣巴克萊"]
+        temp_df["類別"] = temp_df["券商名稱"].apply(lambda x: "外資" if x in self.foreign_broker_list else "台資")
+        temp_df = temp_df.set_index("timestamp")
+
         return df
 
-    def get_multiDailyOHLCV_df(self, stockIdList, startTime, endTime):
+    # def get_multiDailyOHLCV_df(self, stockIdList, startTime, endTime):
         stockIdDictList = [{"stockId": s} for s in stockIdList]
         temp_df = pd.DataFrame(list(self.db["dailyPrice"].find(
                  {"$or":stockIdDictList, "timestamp": {"$gte": startTime, "$lte": endTime}},  # selection criterion
@@ -126,11 +74,103 @@ class Data(object):
         temp_df = self.__parse_df_to_float(temp_df)
         return temp_df
 
-    def get_multiDailyOHLCV_dict(self, stockIdList, startTime, endTime):
-        dfs = []
-        for stockId in stockIdList:
-            dfs.append(self.get_singleDailyOHLCV_df(stockId, startTime, endTime))
-        return dict(zip(stockIdList, dfs))
+    def get_DailyOHLCV_df(self, stockIdList, startTime, endTime):
+        """ fn: 獲取標的(們)的日資料的開高低收與交易量
+            input:
+                stockIdList: 可為string(例如"2330")，或是list(例如["2330", "2317", ...])
+                startTime: python datetime格式
+                endTime: python datetime格式
+            output:
+                pandas DataFrame; index為時間(timestamp)，columns為multilevleultilevle
+                第一個column為stockId, 第二個column為open, high, low, close, volume
+            """
+        if type(stockIdList) is str:
+            stockId = stockIdList
+            return self.__get_singleDailyOHLCV_df(stockId, startTime, endTime)
+        elif type(stockIdList) is list:
+            sub_dfs = [self.__get_singleDailyOHLCV_df(stockId, startTime, endTime) for stockId in stockIdList]
+            return pd.concat(sub_dfs, axis=1)
+        else:
+            raise TypeError("the variable stockIdList should be a list (or a string is also acceptable)")
+
+    def get_DailyChips_df(self, stockIdList, startTime, endTime):
+        """ fn: 獲取標的日資料的籌碼面資訊
+            input:
+                stockIdList: 可為string(例如"2330")，或是list(例如["2330", "2317", ...])
+                startTime: python datetime格式
+                endTime: python datetime格式
+            output:
+                pandas DataFrame; index為時間(timestamp)，columns為multilevleultilevle
+                第一個column為stockId, 第二個column為籌碼面的各項資訊
+            """
+        if type(stockIdList) is str:
+            stockId = stockIdList
+            return self.__get_singleDailyChips_df(stockId, startTime, endTime)
+        elif type(stockIdList) is list:
+            sub_dfs = [self.__get_singleDailyChips_df(stockId, startTime, endTime) for stockId in stockIdList]
+            return pd.concat(sub_dfs, axis=1)
+        else:
+            raise TypeError("the variable stockIdList should be a list (or a string is also acceptable)")
+
+    def __get_singleDailyOHLCV_df(self, stockId, startTime, endTime):
+        temp_df = pd.DataFrame(list(self.db["dailyPrice"].find(
+                 {"timestamp": {
+                     "$gte": startTime, "$lte": endTime},
+                     "stockId":stockId},  # selection criterion
+                 {"timestamp": "-1",
+                  "成交股數": "1",
+                  "收盤價": "1",
+                  "最低價": "1",
+                  "最高價": "1",
+                  "開盤價": "1"})))
+        # 處理dataframe
+        temp_df = temp_df.drop(columns="_id").drop_duplicates("timestamp", keep="first").set_index("timestamp")
+        # 重新命名OHLCV
+        temp_df = temp_df.rename(columns = {
+            "成交股數": "volume",
+            "收盤價": "close",
+            "最低價": "low",
+            "最高價": "high",
+            "開盤價": "open"})
+        # 將str轉為float
+        temp_df = self.__parse_df_to_float(temp_df)
+        ### create multilevel column
+        cols = list(temp_df.columns)
+        stockIds = [stockId]*len(cols)
+        temp_df.columns = pd.MultiIndex.from_tuples(zip(stockIds, cols))
+        return temp_df
+
+    def __get_singleDailyChips_df(self, stockId, startTime, endTime):
+        chip_collections = [
+            'dailyCreditTrading',
+            'dailyFundTrading',
+            'dailyDayTrading',
+            'dailyOddLots',
+            'dailyStockLending']
+        temp_dfs = []
+        for collections in chip_collections:
+            temp_df = self.get_df_from_db(collections, stockId, startTime, endTime)
+            temp_dfs.append(temp_df)
+        temp_df = pd.concat(temp_dfs, axis=1)
+
+        temp_df = temp_df.drop(columns=
+            ['借券賣出',
+            '借券賣出今日餘額',
+            '借券賣出可使用額度',
+            '借券賣出庫存異動'])
+        #處理三大法人資料不連續
+        if "dailyFundTrading" in chip_collections:
+            temp_df = self.__merge_df_columns(temp_df, "自營商賣出股數", '自營商賣出股數自行買賣', '自營商賣出股數避險')
+            temp_df = self.__merge_df_columns(temp_df, "自營商買進股數", '自營商買進股數自行買賣', '自營商買進股數避險')
+            temp_df = self.__merge_df_columns(temp_df, "外資賣出股數", '外資自營商賣出股數', '外陸資賣出股數不含外資自營商')
+            temp_df = self.__merge_df_columns(temp_df, "外資買進股數", '外資自營商買進股數', '外陸資買進股數不含外資自營商')
+            temp_df = self.__merge_df_columns(temp_df, "外資買賣超股數", '外資自營商買賣超股數', '外陸資買賣超股數不含外資自營商')
+        ### create multilevel column
+        cols = list(temp_df.columns)
+        stockIds = [stockId]*len(cols)
+        temp_df.columns = pd.MultiIndex.from_tuples(zip(stockIds, cols))
+
+        return temp_df
 
     def __parse_close(self, x):
         try: return pd.to_numeric(x["收盤價"].replace(",", ""))
@@ -181,17 +221,15 @@ def plot_columns_time(temp_df):
         p.set_yticklabels(df.columns)
     return df_c
 
+
 if __name__ == '__main__':
     data = Data()
     stockId = "2330"
-    stockIdList = ["2330", "2317"]
-    startTime = datetime.datetime(2005, 1, 1)
+    stockIdList = ["2330", "2317", "0050", "0056", "1101", "2412"]
+    startTime = datetime.datetime(2016, 1, 1)
     endTime = datetime.datetime(2019, 8, 6)
-    collections = "dailyCreditTrading"
-    # df = data.get_singleDailyOHLCV_df(stockId, startTime, endTime)
-    # df = data.get_dailyFundTrading(stockId, startTime, endTime)
-    # df = data.get_singleDailyChips_df(stockId, startTime, endTime)
-    # df = data.get_dailyBrokerPoints_df(stockId, startTime, endTime)
 
-    df = data.get_multiDailyOHLCV_df(stockIdList, startTime, endTime)
-    dic = data.get_multiDailyOHLCV_dict(stockIdList, startTime, endTime)
+    # df = data.get_DailyOHLCV_df(stockId, startTime, endTime)
+    # df = data.get_DailyOHLCV_df(stockIdList, startTime, endTime)
+    # df = data.get_DailyChips_df(stockIdList, startTime, endTime)
+    # df = data.get_singleDailyBrokerPoints_df(stockId, startTime, endTime)
