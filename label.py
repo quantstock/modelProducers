@@ -23,9 +23,9 @@ class Label(object):
     def __init__(self):
         self.data = Data()
 
-    def get_TripleLabeling_df(self,stockId, startTime, endTime, dailyVolSpan0=100,VerticalBarrierDays=5,minRet=0.01,labelColumn="close",cpus=8,ptSl=[1,1]):
-        df = self.data.get_singleDailyOHLCV_df(stockId, startTime, endTime)
-        series = df[labelColumn]
+    def get_TripleLabeling_df(self, stockId, startTime, endTime, dailyVolSpan0=100,VerticalBarrierDays=5,minRet=0.01,labelColumn="close",cpus=8,ptSl=[1,1]):
+        df = self.data.get_DailyOHLCV_df(stockId, startTime, endTime)
+        series = df[stockId][labelColumn]
         target = self.getDailyVol(series, span0=dailyVolSpan0) #done
         tEvents = self.__getTEvents(series, h=0)#,h=dailyVol.mean()) #done
         t1 = self.__addVerticalBarrier(tEvents, series, numDays=VerticalBarrierDays)
@@ -268,6 +268,7 @@ copyreg.pickle(types.MethodType,_pickle_method,_unpickle_method)
 if __name__ == '__main__':
     label = Label()
     stockId = "2330"
+    stockIdList = ["2330", "0050"]
     startTime = datetime.datetime(2010, 1, 1)
     endTime = datetime.datetime(2019, 8, 7)
 
