@@ -82,7 +82,7 @@ class Data(object):
         temp_df.name = stockId
         # 將str轉為float
         temp_df["volume"] = temp_df["volume"].apply(lambda x: x.replace(',', '')).astype(float)
-        temp_df = temp_df.astype(float)
+        temp_df = temp_df.apply(lambda x: x.replace('--', np.nan)).astype(float)
         return temp_df
 
     def get_dailyBrokerPoints(self, stockid, startTime, endTime):

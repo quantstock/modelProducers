@@ -10,7 +10,6 @@ class modelProducer(object):
         # 我們想要用歷史的價格去預測明天的漲跌符號，如果是上漲(標記為+1)，如果是下跌(標記為-1)。<br>
         # 所以這是個**二元分類**問題。我們有許多模型可以使用，linear models/SVM models/tree-based models/KNNs.
 
-        # XY = pd.concat([features, label])
         XY = pd.merge(features, label, left_index=True, right_index=True)
 
         XY = XY.dropna()
@@ -19,11 +18,8 @@ class modelProducer(object):
         timestamps = XY.index
 
         N = 2800
-        n = 100
-        # Xs = [x for x in XY.columns if "X" in x] #選取feature的columns
-
-        # X = XY[Xs]
-        # y = XY["Y"]
+        n = 0
+        
         X = features.loc[timestamps]
         y = label.loc[timestamps]
 
@@ -39,4 +35,4 @@ class modelProducer(object):
         proba = clf.predict_proba(X_test)
         pred = clf.predict(X_test)
 
-        return clf, proba, pred, timestamps
+        return clf, proba, pred, timestamps[N+n:]
